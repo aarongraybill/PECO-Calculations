@@ -2,9 +2,7 @@
 title: "PECO Calculations"
 author: "Aaron Graybill"
 date: "2/10/2021"
-output:
-      html_document:
-        keep_md: true
+output: github_document
 ---
 
 ```{r setup, include=FALSE}
