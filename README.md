@@ -1,2 +1,2 @@
 # PECO-Calculations
-An explanation of how and why the bills are what they are
+**You should open `PECO.pdf`, that's where the results are.**

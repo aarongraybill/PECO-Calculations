@@ -2,29 +2,157 @@
 title: "PECO Calculations"
 author: "Aaron Graybill"
 date: "2/10/2021"
-output: github_document
+output:
+  pdf_document: default
+  github_document: default
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+```{r package pull,include=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
 ```
 
-## Including Plots
+## Introduction
 
-You can also embed plots, for example:
+The impediments to fairly dividing the bills are two-fold.
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+1. Everyone should be paying for the baseline energy consumed daily regardless of household inhabitants.
+2. Not everyone is at the house on the same days.
+
+
+## Procedure
+To address this problem the following cost calculation procedure is conducted:
+
+### Step 1: Dataset
+A dataset was created consisting of each person's days at the house, the total cost per kiloWatt hour for each day (because there's a per unit fee for distribution, generation, and transmission), and the amount of kiloWatt hours used.
+
+The beginning of the dataset looks like the following:
+
+```{r import data and preview}
+d <- read.csv("data/PECOdata.csv") %>% 
+  filter(.,complete.cases(.))
+head(d)
+```
+### Step 2: Estimate Personal kWh Consumption
+We look for days when there is no one at the house to calculate the uninhabited median kiloWatt hour consumption. Call this $\mu$. I compute mu in the following way:
+``` {r compute mu}
+mu_data <-
+  d %>%
+  filter(Aaron == F &
+           Kayleen == F &
+           Gabe == F &
+           Kian == F &
+           Mateo == F) 
+mu <- 
+  mu_data %>% 
+  summarise(mu=median(Usage)) %>%
+  pull()
+
+ggplot(mu_data)+
+  geom_density(aes(x=Usage))+
+  geom_vline(aes(xintercept=mu,col="mu"))
+
+
+```
+With $\mu=`r mu`$, we then say that each person consumes $\frac{\mu}{6}$ kWh per period. Each persons total consumption per period is usage by:
+
+$$
+u_t^{name}=
+\begin{cases}
+\frac{\mu}{6}+\frac{i^{name}_t}{\sum\limits_{n\in{names}}i_t^n}\cdot\left(\texttt{Usage}-\mu\right) & \texttt{Usage}\geq\mu\ \& \ \textrm{inhabited}\\
+\frac{\texttt{Usage}}{6} & \textrm{otherwise}
+\end{cases}
+$$
+
+In the above formula $i_t^{name}$ is a indicator variable that takes $1$ if the person is at the house at time $t$, and $0$ otherwise. Note that if there is no one at the house we simply divide usage by 6.
+
+This usage formula has the desirable feature that the sum of each person's usage is always equal to the total usage. The reason why this function is piecewise is because in the cases when household consumption is less than $\mu$, which happens, it is possible for the people at the house to pay less than those not there, not the right result.
+
+Now let's compute this usage:
+```{r Compute usage}
+d_long <- 
+  d %>% 
+  pivot_longer(cols=-c(Date,Usage,Bill,per.unit))
+d_long <- 
+  d_long %>% 
+  group_by(Date) %>% 
+  mutate(
+    usage_est=
+      case_when(
+      (Usage>=mu) & (sum(value)>0) ~mu/6+(value/sum(value))*(Usage-mu),
+      TRUE~Usage/6
+    )
+  )
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+Note that a random sample of the total usage minus the total estimated usage are zero
+```{r Test that formula works}
+set.seed(1234)
+  d_long %>% 
+  group_by(Date) %>% 
+  summarise(difference=Usage-sum(usage_est)) %>%
+  ungroup() %>% 
+  sample_n(6) %>% 
+  head()
+```
+
+## Step 3: Compute Personal Daily Contribution
+
+We have now given each person a kWh contribution, and since we have a per period price, the only step left is multiplying these two to compute each persons daily electric bill.
+
+We can do that in the following way:
+```{r Compute final data}
+final_data <- 
+  d_long %>% 
+  mutate(daily=usage_est*per.unit) %>% 
+  group_by(name) %>% 
+  mutate(total=sum(daily)) %>% 
+  ungroup() %>% 
+  mutate(Date=lubridate::mdy(Date))
+```
+
+```{r Display Results}
+knitr::kable(final_data %>% select(name,total) %>% unique() %>% arrange(total),format = 'latex')
+```
+
+
+
+## Plot Our expenses over time
+
+```{r plot, echo=FALSE}
+ggplot(final_data)+
+  theme_linedraw()+
+  geom_line(aes(x=as.Date(Date),y=daily,col=name),alpha=.5)
+```
+
+## Okay that's great, but there are fixed costs
+Let's add fixed costs, we know that the total expense should be the sum of each of the bills: $122.09+74.65+40.82=`r 122.09+74.65+40.82`. Okay easy enoug, take the residual not yet covered by the sum of our individual contribution and divide it by six.
+
+We currently have accounted for $`r final_data %>% select(name,total) %>% unique() %>% pull(total) %>% sum()`
+
+```{r include=F}
+to_pay=122.09+74.65+40.82
+paid=final_data %>% select(name,total) %>% unique() %>% pull(total) %>% sum()
+
+remaining=to_pay-paid
+```
+
+That leaves $`r remaining`. Adding an additional `r remaining/6` to each person. This brings everyone's totals to:
+
+```{r Finish up, echo=F}
+final_data <- 
+  final_data %>% 
+  mutate(total_w_fixed=total+remaining/6) 
+  
+knitr::kable(
+  final_data %>%
+        select(name,total_w_fixed) %>% 
+    unique() %>% arrange(total_w_fixed),digits=2
+  )
+```
+
